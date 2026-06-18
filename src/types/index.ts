@@ -151,6 +151,48 @@ export interface SearchFilters {
   status?: ArchiveStatus
 }
 
+export type AppTabKey = 'collection' | 'verification' | 'archive' | 'archive_tasks'
+
+export interface NavigationContext {
+  fromTab?: AppTabKey
+  caseId?: string
+  highlightCard?:
+    | 'patient_info'
+    | 'imaging_stage'
+    | 'supplies'
+    | 'contrast_agent'
+    | 'dual_signature'
+    | 'media_list'
+    | 'batch_view'
+  scrollTo?: string
+}
+
+export type ArchiveTaskStatus = 'running' | 'success' | 'partial' | 'failed'
+
+export interface ArchiveTaskCaseResult {
+  caseId: string
+  patientName: string
+  hospitalNumber: string
+  surgeryName: string
+  status: 'success' | 'failed' | 'skipped'
+  reason?: string
+  warnings?: string[]
+  qualityCheckSnapshot?: QualityCheckSnapshot
+}
+
+export interface ArchiveTask {
+  id: string
+  name: string
+  status: ArchiveTaskStatus
+  operator: string
+  createdAt: string
+  finishedAt?: string
+  totalCount: number
+  successCount: number
+  failedCount: number
+  caseResults: ArchiveTaskCaseResult[]
+}
+
 export const SurgicalStageLabels: Record<SurgicalStage, string> = {
   preoperative: '术前',
   puncture: '穿刺',

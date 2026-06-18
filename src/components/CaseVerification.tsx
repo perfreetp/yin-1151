@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import {
   Card,
   Row,
@@ -70,6 +70,11 @@ export const CaseVerification: React.FC = () => {
   const [supplyForm] = Form.useForm<SupplyFormData>()
   const [contrastForm] = Form.useForm<ContrastFormData>()
 
+  const suppliesCardRef = useRef<HTMLDivElement>(null)
+  const contrastCardRef = useRef<HTMLDivElement>(null)
+  const verificationCardRef = useRef<HTMLDivElement>(null)
+  const [highlightCard, setHighlightCard] = useState<string | null>(null)
+
   const {
     cases,
     currentUser,
@@ -81,8 +86,36 @@ export const CaseVerification: React.FC = () => {
     verifyCase,
     resetVerification,
     getVerificationInfo,
-    checkCaseIntegrity
+    checkCaseIntegrity,
+    navigationContext,
+    clearNavigationContext,
+    setCurrentCase
   } = useAppStore()
+
+  useEffect(() => {
+    if (navigationContext?.caseId && navigationContext.caseId !== selectedCaseId) {
+      setSelectedCaseId(navigationContext.caseId)
+      setCurrentCase(navigationContext.caseId)
+    }
+    if (navigationContext?.highlightCard) {
+      setHighlightCard(navigationContext.highlightCard)
+      const map: Record<string, React.RefObject<HTMLDivElement>> = {
+        supplies: suppliesCardRef,
+        contrast_agent: contrastCardRef,
+        dual_signature: verificationCardRef
+      }
+      const ref = map[navigationContext.highlightCard]
+      if (ref?.current) {
+        setTimeout(() => {
+          ref.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+        }, 200)
+      }
+      setTimeout(() => {
+        setHighlightCard(null)
+        clearNavigationContext()
+      }, 3000)
+    }
+  }, [navigationContext])
 
   const pendingCases = cases.filter((c) => c.status !== 'archived')
   const selectedCase = cases.find((c) => c.id === selectedCaseId)
@@ -440,6 +473,7 @@ export const CaseVerification: React.FC = () => {
               </Card>
 
               <Card
+                ref={suppliesCardRef}
                 size="small"
                 title={
                   <Space>
@@ -453,7 +487,11 @@ export const CaseVerification: React.FC = () => {
                     添加耗材
                   </Button>
                 }
-                style={{ marginBottom: 12 }}
+                style={{
+                  marginBottom: 12,
+                  boxShadow: highlightCard === 'supplies' ? '0 0 0 3px #1677ff' : undefined,
+                  transition: 'box-shadow 0.3s'
+                }}
                 bodyStyle={{ padding: 0 }}
               >
                 <Table
@@ -466,6 +504,7 @@ export const CaseVerification: React.FC = () => {
               </Card>
 
               <Card
+                ref={contrastCardRef}
                 size="small"
                 title={
                   <Space>
@@ -487,7 +526,11 @@ export const CaseVerification: React.FC = () => {
                     {selectedCase.contrastAgent ? '编辑' : '登记'}
                   </Button>
                 }
-                style={{ marginBottom: 12 }}
+                style={{
+                  marginBottom: 12,
+                  boxShadow: highlightCard === 'contrast_agent' ? '0 0 0 3px #1677ff' : undefined,
+                  transition: 'box-shadow 0.3s'
+                }}
               >
                 {selectedCase.contrastAgent ? (
                   <Row gutter={24}>
@@ -531,6 +574,7 @@ export const CaseVerification: React.FC = () => {
               </Card>
 
               <Card
+                ref={verificationCardRef}
                 size="small"
                 title={
                   <Space>
@@ -561,6 +605,10 @@ export const CaseVerification: React.FC = () => {
                     </Button>
                   ) : null
                 }
+                style={{
+                  boxShadow: highlightCard === 'dual_signature' ? '0 0 0 3px #1677ff' : undefined,
+                  transition: 'box-shadow 0.3s'
+                }}
               >
                 <Steps
                   size="small"

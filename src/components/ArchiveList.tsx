@@ -61,6 +61,7 @@ import {
   ArchiveStatusLabels,
   VerifierRoleLabels
 } from '../types'
+import { ArchiveHandoverModal } from './ArchiveHandoverModal'
 
 const { Title, Text } = Typography
 const { Option } = Select
@@ -78,6 +79,8 @@ interface SearchFormData {
 
 export const ArchiveList: React.FC = () => {
   const [detailVisible, setDetailVisible] = useState(false)
+  const [handoverVisible, setHandoverVisible] = useState(false)
+  const [handoverCaseId, setHandoverCaseId] = useState<string | null>(null)
   const [selectedCase, setSelectedCase] = useState<SurgicalCase | null>(null)
   const [archiveConfirmVisible, setArchiveConfirmVisible] = useState(false)
   const [batchResultVisible, setBatchResultVisible] = useState(false)
@@ -191,12 +194,25 @@ export const ArchiveList: React.FC = () => {
   }
 
   const jumpToFix = (item: QualityCheckItem) => {
-    if (!item.targetWindow) return
-    const hint = item.jumpHint ? `\n提示：${item.jumpHint}` : ''
-    message.info(`请切换到「${item.targetWindow === 'collection' ? '术中采集' : item.targetWindow === 'verification' ? '病例核对' : '归档列表'}」页面修复「${item.label}」${hint}`)
-    if (item.targetWindow === 'collection' && selectedCase) {
-      setCurrentCase(selectedCase.id)
+    if (!item.targetWindow || !selectedCase) return
+    const targetTab = item.targetWindow === 'collection'
+      ? 'collection'
+      : item.targetWindow === 'verification'
+      ? 'verification'
+      : 'archive'
+    const highlightMap: Record<string, NavigationContext['highlightCard']> = {
+      patient_info: 'patient_info',
+      imaging_stage: 'imaging_stage',
+      supplies: 'supplies',
+      contrast_agent: 'contrast_agent',
+      dual_signature: 'dual_signature'
     }
+    navigateTo(targetTab, {
+      fromTab: 'archive',
+      caseId: selectedCase.id,
+      highlightCard: highlightMap[item.key],
+      scrollTo: item.key
+    })
   }
 
   const handleBatchArchive = () => {
@@ -206,17 +222,20 @@ export const ArchiveList: React.FC = () => {
     }
     Modal.confirm({
       title: '批量归档确认',
-      content: `确认归档已勾选的 ${selectedRowKeys.length} 例病例吗？每例会独立判断，失败不影响其他。`,
+      content: `确认归档已勾选的 ${selectedRowKeys.length} 例病例吗？每例会独立判断，失败不影响其他。归档后可在「归档任务中心」追溯。`,
       okText: '开始批量归档',
       cancelText: '取消',
       onOk: () => {
-        const result = batchArchiveCases(selectedRowKeys.map((k) => k as string), currentUser)
+        const result = batchArchiveCases(
+          selectedRowKeys.map((k) => k as string),
+          currentUser
+        )
         setBatchResult(result)
         setBatchResultVisible(true)
         setSelectedRowKeys([])
         const total = result.success.length + result.failed.length
         message.success(
-          `批量归档完成：成功 ${result.success.length} 例 / 失败 ${result.failed.length} 例 / 共 ${total} 例`
+          `批量归档完成：成功 ${result.success.length} 例 / 失败 ${result.failed.length} 例 / 共 ${total} 例（任务号已保存，可前往归档任务中心查看）`
         )
       }
     })
@@ -577,6 +596,17 @@ export const ArchiveList: React.FC = () => {
         onClose={() => setDetailVisible(false)}
         extra={
           <Space>
+            <Button
+              icon={<FileTextOutlined />}
+              onClick={() => {
+                if (selectedCase) {
+                  setHandoverCaseId(selectedCase.id)
+                  setHandoverVisible(true)
+                }
+              }}
+            >
+              交接单
+            </Button>
             {selectedCase && selectedCase.status !== 'archived' && (
               <Button type="primary" icon={<InboxOutlined />} onClick={() => {
                 setDetailVisible(false)
@@ -1270,6 +1300,17 @@ export const ArchiveList: React.FC = () => {
           </Space>
         )}
       </Modal>
+
+      {handoverCaseId && (
+        <ArchiveHandoverModal
+          open={handoverVisible}
+          caseId={handoverCaseId}
+          onClose={() => {
+            setHandoverVisible(false)
+            setHandoverCaseId(null)
+          }}
+        />
+      )}
     </div>
   )
 }

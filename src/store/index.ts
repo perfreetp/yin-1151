@@ -19,7 +19,11 @@ import type {
   VerifierRole,
   QualityCheckItem,
   QualityCheckSnapshot,
-  SurgicalStage
+  SurgicalStage,
+  AppTabKey,
+  NavigationContext,
+  ArchiveTask,
+  ArchiveTaskCaseResult
 } from '../types'
 
 interface AppState {
@@ -30,6 +34,9 @@ interface AppState {
   currentUser: string
   currentCaseId: string | null
   searchFilters: SearchFilters
+  activeTab: AppTabKey
+  navigationContext: NavigationContext | null
+  archiveTasks: ArchiveTask[]
 
   addPatient: (patient: Omit<Patient, 'id'>) => Patient
   updatePatient: (id: string, updates: Partial<Patient>) => void
@@ -56,12 +63,16 @@ interface AppState {
     filePath: string
     fileSize: number
     capturedAt: string
+    importedAt: string
     stage?: SurgicalStage
     description?: string
   }) => MediaItem
 
   updateMediaItem: (caseId: string, mediaId: string, updates: Partial<MediaItem>) => void
   removeMediaItem: (caseId: string, mediaId: string) => void
+  batchUpdateMediaStage: (caseId: string, mediaIds: string[], stage: SurgicalStage) => void
+  batchRemoveMedia: (caseId: string, mediaIds: string[]) => void
+  batchMoveMediaDevice: (caseId: string, mediaIds: string[], device: ImagingDevice) => void
 
   addSupplyItem: (caseId: string, data: Omit<SupplyItem, 'id' | 'caseId'>) => SupplyItem
   updateSupplyItem: (caseId: string, supplyId: string, updates: Partial<SupplyItem>) => void
@@ -73,7 +84,8 @@ interface AppState {
   resetVerification: (caseId: string) => void
   getVerificationInfo: (caseId: string) => VerificationInfo
   archiveCase: (caseId: string, operator: string) => { success: boolean; warnings: string[] }
-  batchArchiveCases: (caseIds: string[], operator: string) => {
+  batchArchiveCases: (caseIds: string[], operator: string, taskName?: string) => {
+    taskId: string
     success: string[]
     failed: { caseId: string; reason: string }[]
     warnings: { caseId: string; items: string[] }[]
@@ -87,7 +99,13 @@ interface AppState {
 
   addArchiveLog: (caseId: string, action: ArchiveLog['action'], details: string, operator?: string) => void
 
-  setSearchFilters: (filters: Partial<SearchFilters>) => void
+  setSearchFilters: (filters: SearchFilters) => void
+
+  navigateTo: (tab: AppTabKey, context?: NavigationContext) => void
+  clearNavigationContext: () => void
+
+  getArchiveTasks: () => ArchiveTask[]
+  getArchiveTaskById: (id: string) => ArchiveTask | undefined
 }
 
 const mockOperatingRooms: OperatingRoom[] = [
@@ -185,6 +203,9 @@ export const useAppStore = create<AppState>()(
       currentUser: '技师小王',
       currentCaseId: null,
       searchFilters: {},
+      activeTab: 'collection',
+      navigationContext: null,
+      archiveTasks: [],
 
       addPatient: (patient) => {
         const newPatient = { ...patient, id: uuidv4() }
@@ -261,7 +282,7 @@ export const useAppStore = create<AppState>()(
           filePath: data.filePath,
           fileSize: data.fileSize,
           capturedAt: data.capturedAt,
-          importedAt: dayjs().format('YYYY-MM-DD HH:mm:ss'),
+          importedAt: data.importedAt,
           description: data.description
         }
         set((state) => ({
@@ -302,6 +323,52 @@ export const useAppStore = create<AppState>()(
               ? {
                   ...c,
                   mediaItems: c.mediaItems.filter((m) => m.id !== mediaId),
+                  updatedAt: dayjs().format('YYYY-MM-DD HH:mm:ss')
+                }
+              : c
+          )
+        }))
+      },
+
+      batchUpdateMediaStage: (caseId, mediaIds, stage) => {
+        set((state) => ({
+          cases: state.cases.map((c) =>
+            c.id === caseId
+              ? {
+                  ...c,
+                  mediaItems: c.mediaItems.map((m) =>
+                    mediaIds.includes(m.id) ? { ...m, stage } : m
+                  ),
+                  updatedAt: dayjs().format('YYYY-MM-DD HH:mm:ss')
+                }
+              : c
+          )
+        }))
+      },
+
+      batchRemoveMedia: (caseId, mediaIds) => {
+        set((state) => ({
+          cases: state.cases.map((c) =>
+            c.id === caseId
+              ? {
+                  ...c,
+                  mediaItems: c.mediaItems.filter((m) => !mediaIds.includes(m.id)),
+                  updatedAt: dayjs().format('YYYY-MM-DD HH:mm:ss')
+                }
+              : c
+          )
+        }))
+      },
+
+      batchMoveMediaDevice: (caseId, mediaIds, device) => {
+        set((state) => ({
+          cases: state.cases.map((c) =>
+            c.id === caseId
+              ? {
+                  ...c,
+                  mediaItems: c.mediaItems.map((m) =>
+                    mediaIds.includes(m.id) ? { ...m, device } : m
+                  ),
                   updatedAt: dayjs().format('YYYY-MM-DD HH:mm:ss')
                 }
               : c
@@ -685,57 +752,116 @@ export const useAppStore = create<AppState>()(
         return { success: true, warnings }
       },
 
-      batchArchiveCases: (caseIds, operator) => {
-        const result: ReturnType<AppState['batchArchiveCases']> = {
+      batchArchiveCases: (caseIds, operator, taskName) => {
+        const result: Omit<ReturnType<AppState['batchArchiveCases']>, 'taskId'> = {
           success: [],
           failed: [],
           warnings: []
         }
+        const caseResults: ArchiveTaskCaseResult[] = []
+        const taskId = uuidv4()
+        const name = taskName || `批量归档任务-${dayjs().format('YYYY-MM-DD HH:mm')}`
+
+        const task: ArchiveTask = {
+          id: taskId,
+          name,
+          status: 'running',
+          operator,
+          createdAt: dayjs().format('YYYY-MM-DD HH:mm:ss'),
+          totalCount: caseIds.length,
+          successCount: 0,
+          failedCount: 0,
+          caseResults: []
+        }
+
+        set((state) => ({ archiveTasks: [task, ...state.archiveTasks] }))
+
         caseIds.forEach((caseId) => {
           const caseData = get().getCaseById(caseId)
+          let status: ArchiveTaskCaseResult['status'] = 'failed'
+          let reason: string | undefined
+          let warningsArr: string[] = []
+          let snapshot: QualityCheckSnapshot | undefined
+
           if (!caseData) {
-            result.failed.push({ caseId, reason: '病例不存在' })
-            return
+            reason = '病例不存在'
+          } else {
+            const info = get().getVerificationInfo(caseId)
+            if (!info.isComplete) {
+              reason = `未完成双人核对（还差 ${info.missingCount} 位：${info.missingRoles.join('、')}）`
+            } else {
+              const integrity = get().checkCaseIntegrity(caseId)
+              if (integrity.errors.length > 0) {
+                reason = integrity.errors.join('；')
+              } else if (caseData.status === 'archived') {
+                status = 'skipped'
+                reason = '已归档，无需重复操作'
+              } else {
+                snapshot = get().buildQualityCheckSnapshot(caseId, operator) || undefined
+                set((state) => ({
+                  cases: state.cases.map((c) =>
+                    c.id === caseId
+                      ? {
+                          ...c,
+                          status: 'archived',
+                          archivedAt: dayjs().format('YYYY-MM-DD HH:mm:ss'),
+                          archivedBy: operator,
+                          qualityCheckSnapshot: snapshot,
+                          updatedAt: dayjs().format('YYYY-MM-DD HH:mm:ss')
+                        }
+                      : c
+                  )
+                }))
+                get().addArchiveLog(caseId, 'archive', '批量归档成功', operator)
+                status = 'success'
+                result.success.push(caseId)
+                if (integrity.warnings.length > 0) {
+                  warningsArr = integrity.warnings
+                  result.warnings.push({ caseId, items: integrity.warnings })
+                }
+              }
+            }
           }
-          const info = get().getVerificationInfo(caseId)
-          if (!info.isComplete) {
-            result.failed.push({
-              caseId,
-              reason: `未完成双人核对（还差 ${info.missingCount} 位：${info.missingRoles.join('、')}）`
-            })
-            return
-          }
-          const integrity = get().checkCaseIntegrity(caseId)
-          if (integrity.errors.length > 0) {
-            result.failed.push({ caseId, reason: integrity.errors.join('；') })
-            return
-          }
-          if (caseData.status === 'archived') {
-            result.failed.push({ caseId, reason: '已归档，无需重复操作' })
-            return
-          }
-          set((state) => ({
-            cases: state.cases.map((c) =>
-              c.id === caseId
-                ? {
-                    ...c,
-                    status: 'archived',
-                    archivedAt: dayjs().format('YYYY-MM-DD HH:mm:ss'),
-                    archivedBy: operator,
-                    qualityCheckSnapshot:
-                      get().buildQualityCheckSnapshot(caseId, operator) || undefined,
-                    updatedAt: dayjs().format('YYYY-MM-DD HH:mm:ss')
-                  }
-                : c
-            )
-          }))
-          get().addArchiveLog(caseId, 'archive', '批量归档成功', operator)
-          result.success.push(caseId)
-          if (integrity.warnings.length > 0) {
-            result.warnings.push({ caseId, items: integrity.warnings })
-          }
+
+          if (status === 'failed') result.failed.push({ caseId, reason: reason || '未知错误' })
+
+          const patientName = caseData?.patient.name || '未知'
+          const hospitalNumber = caseData?.patient.hospitalNumber || '-'
+          const surgeryName = caseData?.surgeryName || '-'
+          caseResults.push({
+            caseId,
+            patientName,
+            hospitalNumber,
+            surgeryName,
+            status,
+            reason,
+            warnings: warningsArr.length > 0 ? warningsArr : undefined,
+            qualityCheckSnapshot: snapshot
+          })
         })
-        return result
+
+        const successCount = caseResults.filter((r) => r.status === 'success').length
+        const failedCount = caseResults.filter((r) => r.status === 'failed').length
+        let taskStatus: ArchiveTask['status'] = 'success'
+        if (failedCount > 0 && successCount > 0) taskStatus = 'partial'
+        if (failedCount > 0 && successCount === 0) taskStatus = 'failed'
+
+        set((state) => ({
+          archiveTasks: state.archiveTasks.map((t) =>
+            t.id === taskId
+              ? {
+                  ...t,
+                  status: taskStatus,
+                  successCount,
+                  failedCount,
+                  finishedAt: dayjs().format('YYYY-MM-DD HH:mm:ss'),
+                  caseResults
+                }
+              : t
+          )
+        }))
+
+        return { taskId, ...result }
       },
 
       searchCases: (filters) => {
@@ -834,11 +960,33 @@ export const useAppStore = create<AppState>()(
 
       setSearchFilters: (filters) => {
         set({ searchFilters: filters })
+      },
+
+      navigateTo: (tab, context) => {
+        if (context?.caseId) {
+          set({ currentCaseId: context.caseId })
+        }
+        set({
+          activeTab: tab,
+          navigationContext: context || null
+        })
+      },
+
+      clearNavigationContext: () => {
+        set({ navigationContext: null })
+      },
+
+      getArchiveTasks: () => {
+        return get().archiveTasks
+      },
+
+      getArchiveTaskById: (id) => {
+        return get().archiveTasks.find((t) => t.id === id)
       }
     }),
     {
       name: 'surgical-archive-storage',
-      version: 2,
+      version: 3,
       migrate: (persisted: unknown, version: number) => {
         const state = (persisted as Partial<AppState>) || {}
         if (version < 2 && Array.isArray(state.cases)) {
@@ -859,6 +1007,18 @@ export const useAppStore = create<AppState>()(
               time: fallbackTime
             }))
             return { ...caseData, verificationRecords: records }
+          })
+        }
+        if (version < 3 && Array.isArray(state.cases)) {
+          state.cases = state.cases.map((c) => {
+            const caseData = c as SurgicalCase
+            return {
+              ...caseData,
+              mediaItems: caseData.mediaItems.map((m) => ({
+                ...m,
+                importedAt: (m as MediaItem).importedAt || m.capturedAt
+              }))
+            }
           })
         }
         return state as AppState

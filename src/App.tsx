@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React from 'react'
 import { Layout, Menu, Typography, Tag, Space, Dropdown, Avatar } from 'antd'
 import {
   CameraOutlined,
@@ -8,25 +8,28 @@ import {
   MenuUnfoldOutlined,
   MenuFoldOutlined,
   SettingOutlined,
-  InfoCircleOutlined
+  InfoCircleOutlined,
+  HistoryOutlined
 } from '@ant-design/icons'
 import { IntraoperativeCollection } from './components/IntraoperativeCollection'
 import { CaseVerification } from './components/CaseVerification'
 import { ArchiveList } from './components/ArchiveList'
+import { ArchiveTaskCenter } from './components/ArchiveTaskCenter'
 import { useAppStore } from './store'
+import type { AppTabKey } from './types'
 
 const { Header, Sider, Content } = Layout
 const { Title, Text } = Typography
 
-type ActiveTab = 'collection' | 'verification' | 'archive'
+type ActiveTab = AppTabKey
 
 export const App: React.FC = () => {
-  const [collapsed, setCollapsed] = useState(false)
-  const [activeTab, setActiveTab] = useState<ActiveTab>('collection')
-  const { currentUser, cases } = useAppStore()
+  const [collapsed, setCollapsed] = React.useState(false)
+  const { activeTab, navigateTo, cases, currentUser, archiveTasks } = useAppStore()
 
   const pendingCount = cases.filter((c) => c.status === 'draft').length
   const verifiedCount = cases.filter((c) => c.status === 'verified').length
+  const taskCount = archiveTasks.length
 
   const VerificationLabel = () => (
     <Space>
@@ -50,6 +53,17 @@ export const App: React.FC = () => {
     </Space>
   )
 
+  const TaskCenterLabel = () => (
+    <Space>
+      归档任务
+      {taskCount > 0 && (
+        <Tag color="gold" style={{ margin: 0 }}>
+          {taskCount}
+        </Tag>
+      )}
+    </Space>
+  )
+
   const menuItems = [
     {
       key: 'collection',
@@ -65,6 +79,11 @@ export const App: React.FC = () => {
       key: 'archive',
       icon: <FolderOpenOutlined />,
       label: <ArchiveLabel />
+    },
+    {
+      key: 'archive_tasks',
+      icon: <HistoryOutlined />,
+      label: <TaskCenterLabel />
     }
   ]
 
@@ -96,6 +115,8 @@ export const App: React.FC = () => {
         return <CaseVerification />
       case 'archive':
         return <ArchiveList />
+      case 'archive_tasks':
+        return <ArchiveTaskCenter />
       default:
         return <IntraoperativeCollection />
     }
@@ -157,7 +178,7 @@ export const App: React.FC = () => {
             mode="inline"
             selectedKeys={[activeTab]}
             items={menuItems}
-            onClick={({ key }) => setActiveTab(key as ActiveTab)}
+            onClick={({ key }) => navigateTo(key as AppTabKey)}
             style={{ borderRight: 0 }}
           />
           <div
