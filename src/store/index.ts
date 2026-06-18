@@ -14,7 +14,10 @@ import type {
   SurgicalStage,
   ImagingDevice,
   MediaType,
-  ArchiveStatus
+  ArchiveStatus,
+  VerificationRecord,
+  VerificationInfo,
+  VerifierRole
 } from '../types'
 
 interface AppState {
@@ -64,14 +67,16 @@ interface AppState {
 
   updateContrastAgent: (caseId: string, data: ContrastAgentRecord) => void
 
-  verifyCase: (caseId: string, verifier: string) => void
+  verifyCase: (caseId: string, verifier: string, role: VerifierRole) => void
+  resetVerification: (caseId: string) => void
+  getVerificationInfo: (caseId: string) => VerificationInfo
   archiveCase: (caseId: string, operator: string) => { success: boolean; warnings: string[] }
 
   searchCases: (filters: SearchFilters) => SurgicalCase[]
 
   checkCaseIntegrity: (caseId: string) => { valid: boolean; warnings: string[]; errors: string[] }
 
-  addArchiveLog: (caseId: string, action: ArchiveLog['action'], details: string) => void
+  addArchiveLog: (caseId: string, action: ArchiveLog['action'], details: string, operator?: string) => void
 
   setSearchFilters: (filters: Partial<SearchFilters>) => void
 }
@@ -104,6 +109,7 @@ const mockCases: SurgicalCase[] = [
     status: 'draft',
     mediaItems: [],
     supplies: [],
+    verificationRecords: [],
     createdAt: now.subtract(2, 'hour').format('YYYY-MM-DD HH:mm:ss'),
     updatedAt: now.subtract(2, 'hour').format('YYYY-MM-DD HH:mm:ss')
   },
@@ -142,7 +148,21 @@ const mockCases: SurgicalCase[] = [
     archivedAt: now.subtract(1, 'day').format('YYYY-MM-DD HH:mm:ss'),
     archivedBy: '技师小王',
     verifiedBy: ['技师小王', '护士小李'],
-    verificationTime: now.subtract(1, 'day').subtract(30, 'minute').format('YYYY-MM-DD HH:mm:ss')
+    verificationTime: now.subtract(1, 'day').subtract(30, 'minute').format('YYYY-MM-DD HH:mm:ss'),
+    verificationRecords: [
+      {
+        id: 'vr-c2-1',
+        verifier: '技师小王',
+        role: 'technician',
+        time: now.subtract(1, 'day').subtract(45, 'minute').format('YYYY-MM-DD HH:mm:ss')
+      },
+      {
+        id: 'vr-c2-2',
+        verifier: '护士小李',
+        role: 'nurse',
+        time: now.subtract(1, 'day').subtract(30, 'minute').format('YYYY-MM-DD HH:mm:ss')
+      }
+    ]
   }
 ]
 
@@ -186,6 +206,7 @@ export const useAppStore = create<AppState>()(
           status: 'draft',
           mediaItems: [],
           supplies: [],
+          verificationRecords: [],
           createdAt: dayjs().format('YYYY-MM-DD HH:mm:ss'),
           updatedAt: dayjs().format('YYYY-MM-DD HH:mm:ss')
         }
@@ -343,37 +364,108 @@ export const useAppStore = create<AppState>()(
         }))
       },
 
-      verifyCase: (caseId, verifier) => {
+      getVerificationInfo: (caseId) => {
+        const caseData = get().getCaseById(caseId)
+        const records = caseData?.verificationRecords || []
+        const signedTechnician = records.find((r) => r.role === 'technician')
+        const signedNurse = records.find((r) => r.role === 'nurse')
+        const missingRoles: string[] = []
+        if (!signedTechnician) missingRoles.push('技师')
+        if (!signedNurse) missingRoles.push('巡回护士')
+        return {
+          records,
+          count: records.length,
+          required: 2,
+          isComplete: records.length >= 2,
+          missingCount: Math.max(0, 2 - records.length),
+          signedTechnician,
+          signedNurse,
+          missingRoles
+        }
+      },
+
+      verifyCase: (caseId, verifier, role) => {
         const caseData = get().getCaseById(caseId)
         if (!caseData) return
 
-        const verifiedBy = caseData.verifiedBy || []
-        if (!verifiedBy.includes(verifier)) {
-          verifiedBy.push(verifier)
+        const records = caseData.verificationRecords || []
+        if (records.some((r) => r.role === role)) {
+          return
+        }
+        if (records.some((r) => r.verifier === verifier)) {
+          return
         }
 
-        let status: ArchiveStatus = caseData.status
-        if (verifiedBy.length >= 2) {
-          status = 'verified'
+        const newRecord: VerificationRecord = {
+          id: uuidv4(),
+          verifier,
+          role,
+          time: dayjs().format('YYYY-MM-DD HH:mm:ss')
         }
+        const nextRecords = [...records, newRecord]
+        const isComplete = nextRecords.length >= 2
 
         set((state) => ({
           cases: state.cases.map((c) =>
             c.id === caseId
               ? {
                   ...c,
-                  verifiedBy,
-                  verificationTime: verifiedBy.length >= 2 ? dayjs().format('YYYY-MM-DD HH:mm:ss') : c.verificationTime,
-                  status,
+                  verificationRecords: nextRecords,
+                  verifiedBy: nextRecords.map((r) => r.verifier),
+                  verificationTime: isComplete
+                    ? dayjs().format('YYYY-MM-DD HH:mm:ss')
+                    : c.verificationTime,
+                  status: isComplete ? 'verified' : 'draft',
                   updatedAt: dayjs().format('YYYY-MM-DD HH:mm:ss')
                 }
               : c
           )
         }))
-        get().addArchiveLog(caseId, 'verify', `${verifier}核对确认`)
+        const roleLabel = role === 'technician' ? '技师' : '巡回护士'
+        get().addArchiveLog(caseId, 'verify', `${verifier}（${roleLabel}）核对确认`, verifier)
+      },
+
+      resetVerification: (caseId) => {
+        const caseData = get().getCaseById(caseId)
+        if (!caseData || caseData.status === 'archived') return
+
+        set((state) => ({
+          cases: state.cases.map((c) =>
+            c.id === caseId
+              ? {
+                  ...c,
+                  verificationRecords: [],
+                  verifiedBy: [],
+                  verificationTime: undefined,
+                  status: 'draft',
+                  updatedAt: dayjs().format('YYYY-MM-DD HH:mm:ss')
+                }
+              : c
+          )
+        }))
+        get().addArchiveLog(caseId, 'verify', '重置核对记录')
       },
 
       archiveCase: (caseId, operator) => {
+        const caseData = get().getCaseById(caseId)
+        if (!caseData) {
+          return { success: false, warnings: ['病例不存在'] }
+        }
+
+        const info = get().getVerificationInfo(caseId)
+        if (!info.isComplete) {
+          const signedDesc =
+            info.records.length > 0
+              ? `已确认：${info.records.map((r) => r.verifier).join('、')}`
+              : '尚无任何人确认'
+          return {
+            success: false,
+            warnings: [
+              `病例尚未完成双人核对，无法归档（${signedDesc}；还差 ${info.missingCount} 位：${info.missingRoles.join('、')}）`
+            ]
+          }
+        }
+
         const { valid, warnings, errors } = get().checkCaseIntegrity(caseId)
         if (errors.length > 0) {
           return { success: false, warnings: [...errors] }
@@ -392,7 +484,7 @@ export const useAppStore = create<AppState>()(
               : c
           )
         }))
-        get().addArchiveLog(caseId, 'archive', '完成归档')
+        get().addArchiveLog(caseId, 'archive', '完成归档', operator)
         return { success: true, warnings }
       },
 
@@ -476,12 +568,12 @@ export const useAppStore = create<AppState>()(
         }
       },
 
-      addArchiveLog: (caseId, action, details) => {
+      addArchiveLog: (caseId, action, details, operator) => {
         const log: ArchiveLog = {
           id: uuidv4(),
           caseId,
           action,
-          operator: get().currentUser,
+          operator: operator ?? get().currentUser,
           timestamp: dayjs().format('YYYY-MM-DD HH:mm:ss'),
           details
         }
@@ -497,7 +589,32 @@ export const useAppStore = create<AppState>()(
       }
     }),
     {
-      name: 'surgical-archive-storage'
+      name: 'surgical-archive-storage',
+      version: 2,
+      migrate: (persisted: unknown, version: number) => {
+        const state = (persisted as Partial<AppState>) || {}
+        if (version < 2 && Array.isArray(state.cases)) {
+          state.cases = state.cases.map((c) => {
+            const caseData = c as SurgicalCase
+            if (caseData.verificationRecords && caseData.verificationRecords.length > 0) {
+              return caseData
+            }
+            const verifiedBy: string[] = caseData.verifiedBy || []
+            const fallbackTime =
+              caseData.verificationTime ||
+              caseData.updatedAt ||
+              dayjs().format('YYYY-MM-DD HH:mm:ss')
+            const records: VerificationRecord[] = verifiedBy.map((v, idx) => ({
+              id: `migrated-${caseData.id}-${idx}`,
+              verifier: v,
+              role: idx === 0 ? 'technician' : 'nurse',
+              time: fallbackTime
+            }))
+            return { ...caseData, verificationRecords: records }
+          })
+        }
+        return state as AppState
+      }
     }
   )
 )

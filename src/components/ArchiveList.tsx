@@ -82,6 +82,7 @@ export const ArchiveList: React.FC = () => {
     setSearchFilters,
     searchCases,
     checkCaseIntegrity,
+    getVerificationInfo,
     archiveCase
   } = useAppStore()
 
@@ -123,6 +124,11 @@ export const ArchiveList: React.FC = () => {
   const handleConfirmArchive = () => {
     if (!selectedCase) return
 
+    if (!verificationInfo?.isComplete) {
+      message.error('病例尚未完成双人核对，无法归档')
+      return
+    }
+
     const result = archiveCase(selectedCase.id, currentUser)
     if (result.success) {
       message.success('归档成功')
@@ -154,6 +160,8 @@ export const ArchiveList: React.FC = () => {
   }
 
   const integrityCheck = selectedCase ? checkCaseIntegrity(selectedCase.id) : null
+  const verificationInfo = selectedCase ? getVerificationInfo(selectedCase.id) : null
+  const canArchive = !!verificationInfo?.isComplete && selectedCase?.status !== 'archived'
   const caseLogs = selectedCase
     ? archiveLogs.filter((l) => l.caseId === selectedCase.id).reverse()
     : []
@@ -561,16 +569,23 @@ export const ArchiveList: React.FC = () => {
                 </Card>
               )}
 
-              {selectedCase.verifiedBy && selectedCase.verifiedBy.length > 0 && (
+              {selectedCase.verificationRecords && selectedCase.verificationRecords.length > 0 && (
                 <Card size="small" title="核对记录" style={{ marginBottom: 16 }}>
-                  <Space>
-                    {selectedCase.verifiedBy.map((v, idx) => (
-                      <Tag key={idx} color="green" icon={<CheckCircleOutlined />}>
-                        {v} 已确认
-                      </Tag>
+                  <Space orientation="vertical" size={8} style={{ width: '100%' }}>
+                    {selectedCase.verificationRecords.map((r) => (
+                      <Space key={r.id} wrap>
+                        <Tag color="green" icon={<CheckCircleOutlined />}>
+                          {r.role === 'technician' ? '技师' : '巡回护士'}：{r.verifier}
+                        </Tag>
+                        <Text type="secondary">确认时间：{r.time}</Text>
+                      </Space>
                     ))}
-                    {selectedCase.verificationTime && (
-                      <Text type="secondary">核对时间: {selectedCase.verificationTime}</Text>
+                    {verificationInfo?.isComplete ? (
+                      <Text type="success">双人核对已完成（{selectedCase.verificationTime}）</Text>
+                    ) : (
+                      <Text type="warning">
+                        核对未完成，还差 {verificationInfo?.missingCount} 位（{verificationInfo?.missingRoles.join('、')}）
+                      </Text>
                     )}
                   </Space>
                 </Card>
@@ -660,7 +675,7 @@ export const ArchiveList: React.FC = () => {
         onOk={handleConfirmArchive}
         onCancel={() => setArchiveConfirmVisible(false)}
         okText="确认归档"
-        okButtonProps={{ danger: false, type: 'primary' }}
+        okButtonProps={{ type: 'primary', disabled: !canArchive }}
         width={600}
       >
         {selectedCase && (
@@ -674,6 +689,47 @@ export const ArchiveList: React.FC = () => {
               <Descriptions.Item label="术者">{selectedCase.surgeon}</Descriptions.Item>
               <Descriptions.Item label="影像资料">{selectedCase.mediaItems.length} 个</Descriptions.Item>
             </Descriptions>
+
+            {verificationInfo && !verificationInfo.isComplete && (
+              <Alert
+                type="error"
+                showIcon
+                message="病例尚未完成双人核对，无法归档"
+                description={
+                  <Space orientation="vertical" size={4} style={{ width: '100%' }}>
+                    <div>
+                      已确认：
+                      {verificationInfo.records.length > 0
+                        ? verificationInfo.records
+                            .map((r) => `${r.verifier}（${r.role === 'technician' ? '技师' : '巡回护士'}，${r.time}）`)
+                            .join('；')
+                        : '尚无任何人确认'}
+                    </div>
+                    <div style={{ color: '#cf1322' }}>
+                      还差 {verificationInfo.missingCount} 位核对人确认：
+                      {verificationInfo.missingRoles.join('、')}
+                    </div>
+                    <div style={{ fontSize: 12, color: '#999' }}>
+                      请前往“病例核对”完成双人签名后再进行归档。
+                    </div>
+                  </Space>
+                }
+              />
+            )}
+
+            {verificationInfo?.isComplete && (
+              <Alert
+                type="success"
+                showIcon
+                message="双人核对已完成，符合归档前置条件"
+                description={
+                  <span>
+                    技师：{verificationInfo.signedTechnician?.verifier}（{verificationInfo.signedTechnician?.time}）；
+                    巡回护士：{verificationInfo.signedNurse?.verifier}（{verificationInfo.signedNurse?.time}）
+                  </span>
+                }
+              />
+            )}
 
             {integrityCheck && integrityCheck.errors.length > 0 && (
               <Alert
@@ -705,8 +761,8 @@ export const ArchiveList: React.FC = () => {
               />
             )}
 
-            {integrityCheck && integrityCheck.errors.length === 0 && integrityCheck.warnings.length === 0 && (
-              <Alert message="资料完整，可以归档" type="success" showIcon />
+            {integrityCheck && integrityCheck.errors.length === 0 && integrityCheck.warnings.length === 0 && canArchive && (
+              <Alert message="资料完整且双人核对已完成，可以归档" type="success" showIcon />
             )}
 
             <Text type="secondary">

@@ -1,20 +1,51 @@
 {
-  "name": "1151",
+  "name": "surgical-imaging-archive",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.0.0",
   "type": "module",
+  "main": "dist-electron/main.js",
   "scripts": {
     "dev": "vite",
+    "dev:web": "vite --mode web",
     "build": "vite build",
+    "dist": "vite build && electron-builder",
+    "dist:win": "vite build && electron-builder --win",
     "typecheck": "tsc",
     "preview": "vite preview"
+  },
+  "build": {
+    "appId": "com.interventional.imaging-archive",
+    "productName": "介入手术室影像归档系统",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*"
+    ],
+    "win": {
+      "target": "nsis",
+      "artifactName": "介入手术室影像归档系统-Setup-${version}.exe"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "介入手术室影像归档系统"
+    }
   },
   "devDependencies": {
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "@types/uuid": "^10.0.0",
+    "electron": "^42.4.1",
+    "electron-builder": "^26.15.3",
     "typescript": "~6.0.2",
-    "vite": "^8.0.12"
+    "vite": "^8.0.12",
+    "vite-plugin-electron": "^1.0.4"
   },
   "dependencies": {
     "@ant-design/icons": "^6.2.5",

@@ -11,6 +11,7 @@ import {
   Input,
   InputNumber,
   Select,
+  AutoComplete,
   Modal,
   message,
   Divider,
@@ -19,7 +20,8 @@ import {
   Descriptions,
   Checkbox,
   Statistic,
-  Empty
+  Empty,
+  Steps
 } from 'antd'
 import {
   CheckCircleOutlined,
@@ -29,15 +31,19 @@ import {
   FileTextOutlined,
   UserOutlined,
   TeamOutlined,
-  ExperimentOutlined
+  ExperimentOutlined,
+  UndoOutlined,
+  SafetyCertificateOutlined
 } from '@ant-design/icons'
 import { useAppStore } from '../store'
-import type { SupplyItem, MediaItem, SurgicalStage } from '../types'
-import { SurgicalStageLabels, ArchiveStatusLabels } from '../types'
+import type { SupplyItem, MediaItem, SurgicalStage, VerificationRecord } from '../types'
+import { SurgicalStageLabels, ArchiveStatusLabels, VerifierRoleLabels } from '../types'
 
 const { Title, Text } = Typography
 const { Option } = Select
 const { TextArea } = Input
+
+const NURSE_SUGGESTIONS = ['护士小李', '护士小张', '护士小王', '护士小陈', '护士小刘']
 
 interface SupplyFormData {
   name: string
@@ -59,6 +65,7 @@ export const CaseVerification: React.FC = () => {
   const [contrastModalVisible, setContrastModalVisible] = useState(false)
   const [selectedCaseId, setSelectedCaseId] = useState<string | null>(null)
   const [editingSupply, setEditingSupply] = useState<SupplyItem | null>(null)
+  const [secondVerifierName, setSecondVerifierName] = useState('')
 
   const [supplyForm] = Form.useForm<SupplyFormData>()
   const [contrastForm] = Form.useForm<ContrastFormData>()
@@ -72,15 +79,57 @@ export const CaseVerification: React.FC = () => {
     updateContrastAgent,
     updateCase,
     verifyCase,
+    resetVerification,
+    getVerificationInfo,
     checkCaseIntegrity
   } = useAppStore()
 
   const pendingCases = cases.filter((c) => c.status !== 'archived')
   const selectedCase = cases.find((c) => c.id === selectedCaseId)
   const integrityCheck = selectedCase ? checkCaseIntegrity(selectedCase.id) : null
+  const verificationInfo = selectedCase ? getVerificationInfo(selectedCase.id) : null
 
   const handleSelectCase = (caseId: string) => {
     setSelectedCaseId(caseId)
+    setSecondVerifierName('')
+  }
+
+  const handleFirstVerify = () => {
+    if (!selectedCase) return
+    verifyCase(selectedCase.id, currentUser, 'technician')
+    message.success(`第一核对人（技师）${currentUser} 已确认核对`)
+  }
+
+  const handleSecondVerify = () => {
+    if (!selectedCase) return
+    const name = secondVerifierName.trim()
+    if (!name) {
+      message.warning('请录入或选择第二位核对人姓名')
+      return
+    }
+    if (verificationInfo?.signedTechnician?.verifier === name) {
+      message.warning('第二位核对人不能与第一人相同')
+      return
+    }
+    verifyCase(selectedCase.id, name, 'nurse')
+    setSecondVerifierName('')
+    message.success(`第二核对人（巡回护士）${name} 已确认核对，病例状态变更为“已核对”`)
+  }
+
+  const handleResetVerification = () => {
+    if (!selectedCase) return
+    Modal.confirm({
+      title: '重置核对记录',
+      content: '将清除当前双人核对记录，病例状态恢复为“待核对”。是否继续？',
+      okText: '重置',
+      okButtonProps: { danger: true },
+      cancelText: '取消',
+      onOk: () => {
+        resetVerification(selectedCase.id)
+        setSecondVerifierName('')
+        message.success('已重置核对记录')
+      }
+    })
   }
 
   const handleAddSupply = () => {
@@ -132,12 +181,6 @@ export const CaseVerification: React.FC = () => {
     } catch {
       message.error('请填写完整信息')
     }
-  }
-
-  const handleVerify = () => {
-    if (!selectedCase) return
-    verifyCase(selectedCase.id, currentUser)
-    message.success(`${currentUser} 已确认核对`)
   }
 
   const handleSaveNotes = (notes: string) => {
@@ -333,12 +376,22 @@ export const CaseVerification: React.FC = () => {
 
                 <div style={{ marginTop: 12 }}>
                   <Space>
-                    <Checkbox checked disabled>
-                      技师核对
+                    <Checkbox checked={!!verificationInfo?.signedTechnician} disabled>
+                      技师已核对
                     </Checkbox>
-                    <Checkbox checked disabled>
-                      巡回护士核对
+                    <Checkbox checked={!!verificationInfo?.signedNurse} disabled>
+                      巡回护士已核对
                     </Checkbox>
+                    {verificationInfo && !verificationInfo.isComplete && (
+                      <Text type="warning" style={{ fontSize: 12 }}>
+                        （还差 {verificationInfo.missingCount} 位：{verificationInfo.missingRoles.join('、')}）
+                      </Text>
+                    )}
+                    {verificationInfo?.isComplete && (
+                      <Tag color="green" icon={<CheckCircleOutlined />}>
+                        双人核对完成
+                      </Tag>
+                    )}
                   </Space>
                 </div>
               </Card>
@@ -481,46 +534,157 @@ export const CaseVerification: React.FC = () => {
                 size="small"
                 title={
                   <Space>
-                    <CheckCircleOutlined />
+                    <SafetyCertificateOutlined />
                     <Text>双人核对</Text>
+                    {verificationInfo?.isComplete ? (
+                      <Tag color="green" icon={<CheckCircleOutlined />}>
+                        已完成
+                      </Tag>
+                    ) : (
+                      <Tag color="orange">进行中</Tag>
+                    )}
                   </Space>
                 }
-              >
-                <Row gutter={24} align="middle">
-                  <Col flex="auto">
-                    <Space orientation="vertical" size={4}>
-                      <Text type="secondary">核对人员</Text>
-                      <Space>
-                        {selectedCase.verifiedBy?.length ? (
-                          selectedCase.verifiedBy.map((v, idx) => (
-                            <Tag key={idx} color="green" icon={<CheckCircleOutlined />}>
-                              {v} 已确认
-                            </Tag>
-                          ))
-                        ) : (
-                          <Text type="secondary">尚未有人确认</Text>
-                        )}
-                        {(!selectedCase.verifiedBy || selectedCase.verifiedBy.length < 2) && (
-                          <Text type="secondary">还需 {2 - (selectedCase.verifiedBy?.length || 0)} 人确认</Text>
-                        )}
-                      </Space>
-                    </Space>
-                  </Col>
-                  <Col>
+                extra={
+                  verificationInfo &&
+                  !verificationInfo.isComplete &&
+                  verificationInfo.count > 0 &&
+                  selectedCase.status !== 'archived' ? (
                     <Button
-                      type="primary"
-                      size="large"
-                      icon={<CheckCircleOutlined />}
-                      onClick={handleVerify}
-                      disabled={
-                        selectedCase.verifiedBy?.includes(currentUser) ||
-                        (integrityCheck && integrityCheck.errors.length > 0)
-                      }
+                      size="small"
+                      type="link"
+                      danger
+                      icon={<UndoOutlined />}
+                      onClick={handleResetVerification}
                     >
-                      {currentUser} 确认核对
+                      重置核对
                     </Button>
-                  </Col>
-                </Row>
+                  ) : null
+                }
+              >
+                <Steps
+                  size="small"
+                  current={verificationInfo?.count || 0}
+                  style={{ marginBottom: 16 }}
+                  items={[
+                    {
+                      title: '技师确认',
+                      description: verificationInfo?.signedTechnician
+                        ? `${verificationInfo.signedTechnician.verifier} · ${verificationInfo.signedTechnician.time}`
+                        : '待确认'
+                    },
+                    {
+                      title: '巡回护士确认',
+                      description: verificationInfo?.signedNurse
+                        ? `${verificationInfo.signedNurse.verifier} · ${verificationInfo.signedNurse.time}`
+                        : '待确认'
+                    }
+                  ]}
+                />
+
+                <Space orientation="vertical" size={12} style={{ width: '100%' }}>
+                  {verificationInfo?.records.length === 0 && (
+                    <Alert
+                      type="info"
+                      showIcon
+                      message="请第一核对人（技师）确认"
+                      description={`当前登录技师：${currentUser}。确认后将进入第二核对人（巡回护士）签名环节。`}
+                    />
+                  )}
+
+                  {verificationInfo &&
+                    verificationInfo.count === 1 &&
+                    !verificationInfo.isComplete && (
+                      <Alert
+                        type="warning"
+                        showIcon
+                        message="技师已确认，请录入第二位核对人（巡回护士）"
+                        description={
+                          <span>
+                            已确认：{verificationInfo.records[0].verifier}（技师）于{' '}
+                            {verificationInfo.records[0].time}。请由巡回护士录入或选择本人姓名后确认。
+                          </span>
+                        }
+                      />
+                    )}
+
+                  {verificationInfo?.isComplete && (
+                    <Alert
+                      type="success"
+                      showIcon
+                      message="双人核对已完成，病例状态已变更为“已核对”"
+                      description={
+                        <span>
+                          技师：{verificationInfo.signedTechnician?.verifier}（
+                          {verificationInfo.signedTechnician?.time}）；巡回护士：
+                          {verificationInfo.signedNurse?.verifier}（{verificationInfo.signedNurse?.time}）
+                        </span>
+                      }
+                    />
+                  )}
+
+                  {verificationInfo?.records && verificationInfo.records.length > 0 && (
+                    <Row gutter={[8, 8]}>
+                      {verificationInfo.records.map((r: VerificationRecord) => (
+                        <Col key={r.id}>
+                          <Tag color="green" icon={<CheckCircleOutlined />} style={{ padding: '4px 8px' }}>
+                            {VerifierRoleLabels[r.role]}：{r.verifier} · {r.time}
+                          </Tag>
+                        </Col>
+                      ))}
+                    </Row>
+                  )}
+
+                  {!verificationInfo?.isComplete && selectedCase.status !== 'archived' && (
+                    <Row gutter={16} align="middle">
+                      {verificationInfo?.count === 0 && (
+                        <Col>
+                          <Button
+                            type="primary"
+                            size="large"
+                            icon={<CheckCircleOutlined />}
+                            onClick={handleFirstVerify}
+                            disabled={!!integrityCheck && integrityCheck.errors.length > 0}
+                          >
+                            {currentUser} 确认核对（技师）
+                          </Button>
+                          {integrityCheck && integrityCheck.errors.length > 0 && (
+                            <Text type="danger" style={{ marginLeft: 12, fontSize: 12 }}>
+                              存在错误项，无法核对
+                            </Text>
+                          )}
+                        </Col>
+                      )}
+                      {verificationInfo?.count === 1 && (
+                        <>
+                          <Col flex="320px">
+                            <AutoComplete
+                              value={secondVerifierName}
+                              options={NURSE_SUGGESTIONS.map((n) => ({ value: n }))}
+                              style={{ width: '100%' }}
+                              placeholder="请录入或选择第二位核对人姓名（巡回护士）"
+                              filterOption={(input, option) =>
+                                (option?.value ?? '').includes(input)
+                              }
+                              onChange={(val) => setSecondVerifierName(val)}
+                            />
+                          </Col>
+                          <Col>
+                            <Button
+                              type="primary"
+                              size="large"
+                              icon={<CheckCircleOutlined />}
+                              onClick={handleSecondVerify}
+                              disabled={!secondVerifierName.trim()}
+                            >
+                              巡回护士确认核对
+                            </Button>
+                          </Col>
+                        </>
+                      )}
+                    </Row>
+                  )}
+                </Space>
               </Card>
             </>
           )}

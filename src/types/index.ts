@@ -6,6 +6,26 @@ export type MediaType = 'image' | 'video' | 'sequence'
 
 export type ArchiveStatus = 'draft' | 'verified' | 'archived'
 
+export type VerifierRole = 'technician' | 'nurse'
+
+export interface VerificationRecord {
+  id: string
+  verifier: string
+  role: VerifierRole
+  time: string
+}
+
+export interface VerificationInfo {
+  records: VerificationRecord[]
+  count: number
+  required: number
+  isComplete: boolean
+  missingCount: number
+  signedTechnician?: VerificationRecord
+  signedNurse?: VerificationRecord
+  missingRoles: string[]
+}
+
 export interface Patient {
   id: string
   name: string
@@ -34,6 +54,7 @@ export interface SurgicalCase {
   updatedAt: string
   archivedAt?: string
   archivedBy?: string
+  verificationRecords: VerificationRecord[]
   verifiedBy?: string[]
   verificationTime?: string
 }
@@ -115,6 +136,11 @@ export const MediaTypeLabels: Record<MediaType, string> = {
   image: '图像',
   video: '视频',
   sequence: '造影序列'
+}
+
+export const VerifierRoleLabels: Record<VerifierRole, string> = {
+  technician: '技师',
+  nurse: '巡回护士'
 }
 
 export const ArchiveStatusLabels: Record<ArchiveStatus, string> = {
