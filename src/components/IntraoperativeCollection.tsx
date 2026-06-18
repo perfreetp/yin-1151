@@ -68,6 +68,9 @@ export const IntraoperativeCollection: React.FC = () => {
   const [caseFormVisible, setCaseFormVisible] = useState(false)
   const [selectedDevice, setSelectedDevice] = useState<ImagingDevice | null>(null)
   const [selectedStage, setSelectedStage] = useState<SurgicalStage | null>(null)
+  const [selectedMediaIds, setSelectedMediaIds] = useState<React.Key[]>([])
+  const [batchStageVisible, setBatchStageVisible] = useState(false)
+  const [batchStageValue, setBatchStageValue] = useState<SurgicalStage | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const {
@@ -90,6 +93,22 @@ export const IntraoperativeCollection: React.FC = () => {
   const [caseForm] = Form.useForm<CaseFormData>()
 
   const activeCases = cases.filter((c) => c.status !== 'archived')
+
+  const detectDeviceFromFileName = (name: string, availableDevices: ImagingDevice[]): ImagingDevice | null => {
+    const lower = name.toLowerCase()
+    const rules: Array<{ device: ImagingDevice; keywords: string[] }> = [
+      { device: 'dsa', keywords: ['dsa', 'angiogram', 'angio', '造影', '造影图'] },
+      { device: 'ultrasound', keywords: ['ultrasound', 'us', 'us_', '超声', '彩超', 'b超', 'echo'] },
+      { device: 'endoscope', keywords: ['endo', 'scope', '内镜', '内窥', '胃镜', '肠镜', '腔镜'] },
+      { device: 'fluoroscopy', keywords: ['fluo', 'fluor', '透视', 'c臂', 'xray', 'x-ray'] }
+    ]
+    for (const r of rules) {
+      if (r.keywords.some((k) => lower.includes(k))) {
+        if (availableDevices.includes(r.device)) return r.device
+      }
+    }
+    return null
+  }
 
   const handleCreateCase = async () => {
     try {
@@ -129,23 +148,31 @@ export const IntraoperativeCollection: React.FC = () => {
       message.warning('请先选择病例')
       return
     }
-    if (!selectedDevice) {
-      message.warning('请先选择设备')
-      return
-    }
 
     if (!files) return
+
+    const availableDevices =
+      operatingRooms.find((or) => or.name === currentCase.operatingRoom)?.devices || []
+
+    const byDevice: Record<string, number> = {}
+    const byMinute: Record<string, number> = {}
 
     Array.from(files).forEach((file) => {
       let mediaType: MediaType = 'image'
       if (file.type.startsWith('video/')) {
         mediaType = 'video'
-      } else if (file.name.toLowerCase().includes('sequence') || file.name.toLowerCase().includes('seq')) {
+      } else if (
+        file.name.toLowerCase().includes('sequence') ||
+        file.name.toLowerCase().includes('seq')
+      ) {
         mediaType = 'sequence'
       }
 
+      const autoDevice = detectDeviceFromFileName(file.name, availableDevices)
+      const device: ImagingDevice = autoDevice || selectedDevice || availableDevices[0] || 'dsa'
+
       addMediaItem(currentCase.id, {
-        device: selectedDevice,
+        device,
         type: mediaType,
         fileName: file.name,
         filePath: file.name,
@@ -153,9 +180,21 @@ export const IntraoperativeCollection: React.FC = () => {
         capturedAt: dayjs().format('YYYY-MM-DD HH:mm:ss'),
         stage: selectedStage || undefined
       })
+
+      byDevice[device] = (byDevice[device] || 0) + 1
+      const timeBucket = dayjs().format('HH:mm')
+      byMinute[timeBucket] = (byMinute[timeBucket] || 0) + 1
     })
 
-    message.success(`成功导入 ${files.length} 个文件`)
+    const timeBuckets = Object.keys(byMinute).length
+    const deviceDesc = Object.entries(byDevice)
+      .map(([d, n]) => `${ImagingDeviceLabels[d as ImagingDevice] || d} × ${n}`)
+      .join('、')
+    message.success(
+      `成功导入 ${files.length} 个文件${deviceDesc ? `（${deviceDesc}）` : ''}${
+        timeBuckets > 1 ? `，已按 ${timeBuckets} 个拍摄时段分组` : ''
+      }`
+    )
     if (fileInputRef.current) {
       fileInputRef.current.value = ''
     }
@@ -250,6 +289,52 @@ export const IntraoperativeCollection: React.FC = () => {
       )
     }
   ]
+
+  const handleBatchSetStage = () => {
+    if (!currentCase) return
+    if (selectedMediaIds.length === 0) {
+      message.warning('请先勾选需要标记阶段的影像')
+      return
+    }
+    setBatchStageValue(null)
+    setBatchStageVisible(true)
+  }
+
+  const handleConfirmBatchStage = () => {
+    if (!currentCase) return
+    if (!batchStageValue) {
+      message.warning('请选择目标阶段')
+      return
+    }
+    selectedMediaIds.forEach((mid) => {
+      updateMediaItem(currentCase.id, mid as string, { stage: batchStageValue })
+    })
+    message.success(`已将 ${selectedMediaIds.length} 个影像标记为「${SurgicalStageLabels[batchStageValue]}」`)
+    setSelectedMediaIds([])
+    setBatchStageVisible(false)
+  }
+
+  const handleBatchDelete = () => {
+    if (!currentCase) return
+    if (selectedMediaIds.length === 0) {
+      message.warning('请先勾选需要删除的影像')
+      return
+    }
+    Modal.confirm({
+      title: '批量删除',
+      content: `确认删除已勾选的 ${selectedMediaIds.length} 个影像吗？此操作不可撤销。`,
+      okText: '删除',
+      okButtonProps: { danger: true },
+      cancelText: '取消',
+      onOk: () => {
+        selectedMediaIds.forEach((mid) => {
+          removeMediaItem(currentCase.id, mid as string)
+        })
+        message.success(`已删除 ${selectedMediaIds.length} 个影像`)
+        setSelectedMediaIds([])
+      }
+    })
+  }
 
   return (
     <div style={{ padding: 16, height: '100%', display: 'flex', flexDirection: 'column' }}>
@@ -424,10 +509,9 @@ export const IntraoperativeCollection: React.FC = () => {
                     type="primary"
                     size="large"
                     icon={<UploadOutlined />}
-                    disabled={!selectedDevice}
                     onClick={() => fileInputRef.current?.click()}
                   >
-                    一键导入{selectedDevice ? ImagingDeviceLabels[selectedDevice] : ''}资料
+                    一键导入资料
                   </Button>
                   <input
                     ref={fileInputRef}
@@ -439,13 +523,19 @@ export const IntraoperativeCollection: React.FC = () => {
                   />
                 </Col>
                 <Col flex="auto">
-                  <Space>
+                  <Space wrap>
+                    {selectedDevice && (
+                      <Tag color="blue">当前设备：{ImagingDeviceLabels[selectedDevice]}</Tag>
+                    )}
                     <Text type="secondary">
                       已导入 <Text strong>{currentCase.mediaItems.length}</Text> 个文件
                     </Text>
                     {selectedStage && (
                       <Tag color="green">当前阶段: {SurgicalStageLabels[selectedStage]}</Tag>
                     )}
+                    <Tag color="cyan">
+                      未选设备时将按文件名自动识别（DSA / 超声 / 内镜 / 透视）
+                    </Tag>
                   </Space>
                 </Col>
                 <Col>
@@ -453,18 +543,30 @@ export const IntraoperativeCollection: React.FC = () => {
                     onClick={() => {
                       const mockFiles = [
                         { name: 'DSA_img_001.jpg', size: 2048000 },
-                        { name: 'DSA_img_002.jpg', size: 1890000 },
+                        { name: '超声检查_002.jpg', size: 1890000 },
+                        { name: '内镜_video_001.mp4', size: 15728640 },
+                        { name: 'fluoroscopy_img_003.jpg', size: 1678000 },
                         { name: 'angio_seq_001.mp4', size: 15728640 }
                       ]
-                      if (!selectedDevice) {
-                        message.warning('请先选择设备')
+                      if (!currentCase) {
+                        message.warning('请先选择病例')
                         return
                       }
+                      const availableDevices =
+                        operatingRooms.find((or) => or.name === currentCase.operatingRoom)?.devices ||
+                        []
+                      const byDevice: Record<string, number> = {}
                       mockFiles.forEach((file) => {
                         let mediaType: MediaType = 'image'
                         if (file.name.includes('seq')) mediaType = 'sequence'
+                        if (file.name.toLowerCase().includes('video')) mediaType = 'video'
+                        const autoDevice =
+                          detectDeviceFromFileName(file.name, availableDevices) ||
+                          selectedDevice ||
+                          availableDevices[0] ||
+                          'dsa'
                         addMediaItem(currentCase.id, {
-                          device: selectedDevice,
+                          device: autoDevice,
                           type: mediaType,
                           fileName: file.name,
                           filePath: file.name,
@@ -472,11 +574,17 @@ export const IntraoperativeCollection: React.FC = () => {
                           capturedAt: dayjs().format('YYYY-MM-DD HH:mm:ss'),
                           stage: selectedStage || undefined
                         })
+                        byDevice[autoDevice] = (byDevice[autoDevice] || 0) + 1
                       })
-                      message.success('模拟导入 3 个文件')
+                      const desc = Object.entries(byDevice)
+                        .map(
+                          ([d, n]) => `${ImagingDeviceLabels[d as ImagingDevice] || d} × ${n}`
+                        )
+                        .join('、')
+                      message.success(`模拟导入 ${mockFiles.length} 个文件（${desc}）`)
                     }}
                   >
-                    模拟导入
+                    模拟导入（多设备）
                   </Button>
                 </Col>
               </Row>
@@ -486,10 +594,28 @@ export const IntraoperativeCollection: React.FC = () => {
           <Card
             size="small"
             title={
-              <Space>
+              <Space wrap>
                 <Text>影像资料列表</Text>
                 <Tag color="blue">{currentCase.mediaItems.length} 个文件</Tag>
+                {selectedMediaIds.length > 0 && (
+                  <>
+                    <Tag color="gold">已勾选 {selectedMediaIds.length}</Tag>
+                    <Button size="small" type="primary" icon={<ScissorOutlined />} onClick={handleBatchSetStage}>
+                      批量标记阶段
+                    </Button>
+                    <Button size="small" danger icon={<DeleteOutlined />} onClick={handleBatchDelete}>
+                      批量删除
+                    </Button>
+                  </>
+                )}
               </Space>
+            }
+            extra={
+              selectedMediaIds.length > 0 ? (
+                <Button size="small" onClick={() => setSelectedMediaIds([])}>
+                  清空勾选
+                </Button>
+              ) : null
             }
             style={{ flex: 1, overflow: 'auto' }}
             bodyStyle={{ padding: 0 }}
@@ -501,6 +627,11 @@ export const IntraoperativeCollection: React.FC = () => {
               size="small"
               pagination={false}
               scroll={{ y: 300 }}
+              rowSelection={{
+                selectedRowKeys: selectedMediaIds,
+                onChange: (keys) => setSelectedMediaIds(keys),
+                checkStrictly: true
+              }}
             />
           </Card>
         </>
@@ -633,6 +764,33 @@ export const IntraoperativeCollection: React.FC = () => {
             </Col>
           </Row>
         </Form>
+      </Modal>
+
+      <Modal
+        title={`批量标记阶段（已选 ${selectedMediaIds.length} 个）`}
+        open={batchStageVisible}
+        onOk={handleConfirmBatchStage}
+        onCancel={() => setBatchStageVisible(false)}
+        okText="确认标记"
+        width={480}
+      >
+        <div style={{ marginBottom: 12 }}>
+          <Text type="secondary">请选择要设置的手术阶段：</Text>
+        </div>
+        <Row gutter={[8, 8]}>
+          {Object.entries(SurgicalStageLabels).map(([k, label]) => (
+            <Col key={k} xs={12} sm={8}>
+              <Button
+                block
+                type={batchStageValue === k ? 'primary' : 'default'}
+                icon={<ScissorOutlined />}
+                onClick={() => setBatchStageValue(k as SurgicalStage)}
+              >
+                {label}
+              </Button>
+            </Col>
+          ))}
+        </Row>
       </Modal>
     </div>
   )

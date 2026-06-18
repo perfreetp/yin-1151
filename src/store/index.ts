@@ -11,13 +11,15 @@ import type {
   ContrastAgentRecord,
   ArchiveLog,
   SearchFilters,
-  SurgicalStage,
   ImagingDevice,
   MediaType,
   ArchiveStatus,
   VerificationRecord,
   VerificationInfo,
-  VerifierRole
+  VerifierRole,
+  QualityCheckItem,
+  QualityCheckSnapshot,
+  SurgicalStage
 } from '../types'
 
 interface AppState {
@@ -71,6 +73,13 @@ interface AppState {
   resetVerification: (caseId: string) => void
   getVerificationInfo: (caseId: string) => VerificationInfo
   archiveCase: (caseId: string, operator: string) => { success: boolean; warnings: string[] }
+  batchArchiveCases: (caseIds: string[], operator: string) => {
+    success: string[]
+    failed: { caseId: string; reason: string }[]
+    warnings: { caseId: string; items: string[] }[]
+  }
+  getQualityCheckItems: (caseId: string) => QualityCheckItem[]
+  buildQualityCheckSnapshot: (caseId: string, operator: string) => QualityCheckSnapshot | null
 
   searchCases: (filters: SearchFilters) => SurgicalCase[]
 
@@ -446,6 +455,193 @@ export const useAppStore = create<AppState>()(
         get().addArchiveLog(caseId, 'verify', '重置核对记录')
       },
 
+      getQualityCheckItems: (caseId) => {
+        const caseData = get().getCaseById(caseId)
+        if (!caseData) return []
+        const items: QualityCheckItem[] = []
+
+        const p = caseData.patient
+        const patientMessages: string[] = []
+        if (!p.name) patientMessages.push('缺少患者姓名')
+        if (!p.hospitalNumber) patientMessages.push('缺少住院号')
+        if (!p.gender) patientMessages.push('缺少性别')
+        if (!p.age && p.age !== 0) patientMessages.push('缺少年龄')
+        const patientPassed = patientMessages.length === 0
+        items.push({
+          key: 'patient_info',
+          label: '患者信息',
+          category: patientPassed ? 'pass' : 'error',
+          passed: patientPassed,
+          messages: patientPassed ? ['姓名、住院号、性别、年龄均已填写'] : patientMessages,
+          targetWindow: 'collection',
+          jumpHint: '前往术中采集 → 切换病例 → 新建或编辑患者信息'
+        })
+
+        const totalMedia = caseData.mediaItems.length
+        const staged = caseData.mediaItems.filter((m) => m.stage)
+        const unstaged = totalMedia - staged.length
+        const stageCount: Record<string, number> = {}
+        const surgicalStages: SurgicalStage[] = [
+          'preoperative',
+          'puncture',
+          'angiography',
+          'stent_deployment',
+          'postoperative_review'
+        ]
+        surgicalStages.forEach((s) => (stageCount[s] = 0))
+        staged.forEach((m) => {
+          if (m.stage) stageCount[m.stage] = (stageCount[m.stage] || 0) + 1
+        })
+        const coveredStages = surgicalStages.filter((s) => stageCount[s] > 0)
+        const imagingMessages: string[] = []
+        let imagingCategory: QualityCheckItem['category'] = 'pass'
+        let imagingPassed = true
+        if (totalMedia === 0) {
+          imagingPassed = false
+          imagingCategory = 'warning'
+          imagingMessages.push('未导入任何影像资料')
+        } else if (unstaged > 0) {
+          imagingPassed = false
+          imagingCategory = 'error'
+          imagingMessages.push(`${unstaged} 个影像未标记阶段`)
+        } else {
+          const missingStages = surgicalStages.filter((s) => stageCount[s] === 0)
+          if (missingStages.length > 0 && missingStages.length < surgicalStages.length) {
+            imagingCategory = 'info'
+            imagingMessages.push(
+              `已覆盖 ${coveredStages.length} 个阶段；可考虑补充：${missingStages
+                .map((s) =>
+                  s === 'preoperative'
+                    ? '术前'
+                    : s === 'puncture'
+                    ? '穿刺'
+                    : s === 'angiography'
+                    ? '造影'
+                    : s === 'stent_deployment'
+                    ? '支架释放'
+                    : '术后复查'
+                )
+                .join('、')}`
+            )
+          }
+          imagingMessages.push(`共 ${totalMedia} 个影像，已标记 ${staged.length} 个`)
+        }
+        items.push({
+          key: 'imaging_stage',
+          label: '影像阶段',
+          category: imagingCategory,
+          passed: imagingPassed,
+          messages: imagingMessages,
+          targetWindow: 'collection',
+          jumpHint: '前往术中采集 → 选择设备 → 导入影像 → 在列表中标记阶段'
+        })
+
+        const suppliesCount = caseData.supplies.length
+        const supplyMessages: string[] = []
+        let supplyCategory: QualityCheckItem['category'] = suppliesCount > 0 ? 'pass' : 'info'
+        const supplyPassed = true
+        if (suppliesCount === 0) {
+          supplyMessages.push('暂未登记耗材（如未使用可忽略）')
+        } else {
+          const missingBatch = caseData.supplies.filter((s) => !s.batchNumber).length
+          if (missingBatch > 0) {
+            supplyCategory = 'warning'
+            supplyMessages.push(`${missingBatch} 项耗材未填写批号`)
+          }
+          supplyMessages.push(`已登记 ${suppliesCount} 项耗材`)
+        }
+        items.push({
+          key: 'supplies',
+          label: '耗材登记',
+          category: supplyCategory,
+          passed: supplyPassed,
+          messages: supplyMessages,
+          targetWindow: 'verification',
+          jumpHint: '前往病例核对 → 耗材登记卡片 → 添加 / 编辑'
+        })
+
+        const ca = caseData.contrastAgent
+        const contrastMessages: string[] = []
+        let contrastCategory: QualityCheckItem['category'] = ca ? 'pass' : 'info'
+        const contrastPassed = true
+        if (!ca) {
+          contrastMessages.push('暂未登记造影剂使用（如未使用可忽略）')
+        } else {
+          if (!ca.name) contrastMessages.push('缺少造影剂名称')
+          if (!ca.dosage && ca.dosage !== 0) contrastMessages.push('缺少用量')
+          if (!ca.batchNumber) {
+            contrastCategory = 'warning'
+            contrastMessages.push('建议补充批号以便追溯')
+          }
+          if (contrastMessages.length === 0) {
+            contrastMessages.push(`${ca.name} ${ca.dosage}${ca.unit || ''}${ca.batchNumber ? `（${ca.batchNumber}）` : ''}`)
+          }
+        }
+        items.push({
+          key: 'contrast_agent',
+          label: '造影剂使用',
+          category: contrastCategory,
+          passed: contrastPassed,
+          messages: contrastMessages,
+          targetWindow: 'verification',
+          jumpHint: '前往病例核对 → 造影剂使用卡片 → 登记 / 编辑'
+        })
+
+        const info = get().getVerificationInfo(caseId)
+        const sigMessages: string[] = []
+        const sigPassed = info.isComplete
+        const sigCategory: QualityCheckItem['category'] = sigPassed ? 'pass' : 'error'
+        if (info.records.length === 0) {
+          sigMessages.push('尚未开始双人核对（技师 + 巡回护士）')
+        } else {
+          info.records.forEach((r) =>
+            sigMessages.push(
+              `${r.role === 'technician' ? '技师' : '巡回护士'}：${r.verifier}（${r.time}）`
+            )
+          )
+          if (!sigPassed) sigMessages.push(`还差 ${info.missingCount} 位：${info.missingRoles.join('、')}`)
+        }
+        items.push({
+          key: 'dual_signature',
+          label: '双人签名',
+          category: sigCategory,
+          passed: sigPassed,
+          messages: sigMessages,
+          targetWindow: 'verification',
+          jumpHint: '前往病例核对 → 双人核对卡片 → 依次完成技师与巡回护士签名'
+        })
+
+        return items
+      },
+
+      buildQualityCheckSnapshot: (caseId, operator) => {
+        const caseData = get().getCaseById(caseId)
+        if (!caseData) return null
+        const items = get().getQualityCheckItems(caseId)
+        const summary = {
+          passed: items.filter((i) => i.passed).length,
+          total: items.length,
+          errorCount: items.filter((i) => i.category === 'error').length,
+          warningCount: items.filter((i) => i.category === 'warning').length
+        }
+        const mediaByStage: Record<string, number> = {}
+        caseData.mediaItems.forEach((m) => {
+          const key = m.stage || 'unstaged'
+          mediaByStage[key] = (mediaByStage[key] || 0) + 1
+        })
+        const snapshot: QualityCheckSnapshot = {
+          createdAt: dayjs().format('YYYY-MM-DD HH:mm:ss'),
+          operator,
+          items,
+          summary,
+          mediaByStage,
+          mediaUnstaged: caseData.mediaItems.filter((m) => !m.stage).length,
+          suppliesCount: caseData.supplies.length,
+          contrastAgentPresent: !!caseData.contrastAgent
+        }
+        return snapshot
+      },
+
       archiveCase: (caseId, operator) => {
         const caseData = get().getCaseById(caseId)
         if (!caseData) {
@@ -479,6 +675,7 @@ export const useAppStore = create<AppState>()(
                   status: 'archived',
                   archivedAt: dayjs().format('YYYY-MM-DD HH:mm:ss'),
                   archivedBy: operator,
+                  qualityCheckSnapshot: get().buildQualityCheckSnapshot(caseId, operator) || undefined,
                   updatedAt: dayjs().format('YYYY-MM-DD HH:mm:ss')
                 }
               : c
@@ -486,6 +683,59 @@ export const useAppStore = create<AppState>()(
         }))
         get().addArchiveLog(caseId, 'archive', '完成归档', operator)
         return { success: true, warnings }
+      },
+
+      batchArchiveCases: (caseIds, operator) => {
+        const result: ReturnType<AppState['batchArchiveCases']> = {
+          success: [],
+          failed: [],
+          warnings: []
+        }
+        caseIds.forEach((caseId) => {
+          const caseData = get().getCaseById(caseId)
+          if (!caseData) {
+            result.failed.push({ caseId, reason: '病例不存在' })
+            return
+          }
+          const info = get().getVerificationInfo(caseId)
+          if (!info.isComplete) {
+            result.failed.push({
+              caseId,
+              reason: `未完成双人核对（还差 ${info.missingCount} 位：${info.missingRoles.join('、')}）`
+            })
+            return
+          }
+          const integrity = get().checkCaseIntegrity(caseId)
+          if (integrity.errors.length > 0) {
+            result.failed.push({ caseId, reason: integrity.errors.join('；') })
+            return
+          }
+          if (caseData.status === 'archived') {
+            result.failed.push({ caseId, reason: '已归档，无需重复操作' })
+            return
+          }
+          set((state) => ({
+            cases: state.cases.map((c) =>
+              c.id === caseId
+                ? {
+                    ...c,
+                    status: 'archived',
+                    archivedAt: dayjs().format('YYYY-MM-DD HH:mm:ss'),
+                    archivedBy: operator,
+                    qualityCheckSnapshot:
+                      get().buildQualityCheckSnapshot(caseId, operator) || undefined,
+                    updatedAt: dayjs().format('YYYY-MM-DD HH:mm:ss')
+                  }
+                : c
+            )
+          }))
+          get().addArchiveLog(caseId, 'archive', '批量归档成功', operator)
+          result.success.push(caseId)
+          if (integrity.warnings.length > 0) {
+            result.warnings.push({ caseId, items: integrity.warnings })
+          }
+        })
+        return result
       },
 
       searchCases: (filters) => {
@@ -583,9 +833,7 @@ export const useAppStore = create<AppState>()(
       },
 
       setSearchFilters: (filters) => {
-        set((state) => ({
-          searchFilters: { ...state.searchFilters, ...filters }
-        }))
+        set({ searchFilters: filters })
       }
     }),
     {

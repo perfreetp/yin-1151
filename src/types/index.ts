@@ -57,6 +57,40 @@ export interface SurgicalCase {
   verificationRecords: VerificationRecord[]
   verifiedBy?: string[]
   verificationTime?: string
+  qualityCheckSnapshot?: QualityCheckSnapshot
+}
+
+export type QualityCheckItemKey =
+  | 'patient_info'
+  | 'imaging_stage'
+  | 'supplies'
+  | 'contrast_agent'
+  | 'dual_signature'
+
+export interface QualityCheckItem {
+  key: QualityCheckItemKey
+  label: string
+  category: 'error' | 'warning' | 'info' | 'pass'
+  passed: boolean
+  messages: string[]
+  targetWindow?: 'collection' | 'verification' | 'archive'
+  jumpHint?: string
+}
+
+export interface QualityCheckSnapshot {
+  createdAt: string
+  operator: string
+  items: QualityCheckItem[]
+  summary: {
+    passed: number
+    total: number
+    errorCount: number
+    warningCount: number
+  }
+  mediaByStage: Record<string, number>
+  mediaUnstaged: number
+  suppliesCount: number
+  contrastAgentPresent: boolean
 }
 
 export interface MediaItem {
