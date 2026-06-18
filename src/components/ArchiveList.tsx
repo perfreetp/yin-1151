@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
 import {
   Card,
   Row,
@@ -103,10 +103,28 @@ export const ArchiveList: React.FC = () => {
     archiveCase,
     getQualityCheckItems,
     batchArchiveCases,
-    setCurrentCase
+    setCurrentCase,
+    navigationContext,
+    clearNavigationContext
   } = useAppStore()
 
   const filteredCases = searchCases(searchFilters)
+
+  // 处理从任务中心等外部跳转过来，自动打开对应病例详情抽屉并切到指定页签
+  useEffect(() => {
+    if (navigationContext?.caseId && navigationContext?.openArchiveDetail) {
+      const c = cases.find((x) => x.id === navigationContext.caseId)
+      if (c) {
+        setSelectedCase(c)
+        setDetailVisible(true)
+        if (navigationContext.openDetailTab) {
+          setActiveDetailTab(navigationContext.openDetailTab)
+        }
+      }
+      // 消费完立即清除，避免切换标签时又重新触发
+      setTimeout(() => clearNavigationContext(), 500)
+    }
+  }, [navigationContext])
 
   const departments = [...new Set(cases.map((c) => c.patient.department))]
   const surgeons = [...new Set(cases.map((c) => c.surgeon))]
@@ -193,8 +211,12 @@ export const ArchiveList: React.FC = () => {
     return info.isComplete && ic.errors.length === 0 && c.status !== 'archived'
   }
 
-  const jumpToFix = (item: QualityCheckItem) => {
-    if (!item.targetWindow || !selectedCase) return
+  const jumpToFix = (item: QualityCheckItem, targetCase?: SurgicalCase) => {
+    const c = targetCase || selectedCase
+    if (!item.targetWindow || !c) return
+    // 先关掉所有弹窗，避免跳转后界面还被 Modal 遮挡
+    setArchiveConfirmVisible(false)
+    setDetailVisible(false)
     const targetTab = item.targetWindow === 'collection'
       ? 'collection'
       : item.targetWindow === 'verification'
@@ -207,10 +229,16 @@ export const ArchiveList: React.FC = () => {
       contrast_agent: 'contrast_agent',
       dual_signature: 'dual_signature'
     }
+    const hc = highlightMap[item.key]
+    if (!hc) {
+      console.warn('[jumpToFix] 未知的质控项 key:', item.key)
+    }
+    // 同步切换当前病例，避免过去后选中的是另一个
+    setSelectedCase(c)
     navigateTo(targetTab, {
       fromTab: 'archive',
-      caseId: selectedCase.id,
-      highlightCard: highlightMap[item.key],
+      caseId: c.id,
+      highlightCard: hc,
       scrollTo: item.key
     })
   }

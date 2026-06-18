@@ -165,6 +165,8 @@ export interface NavigationContext {
     | 'media_list'
     | 'batch_view'
   scrollTo?: string
+  openArchiveDetail?: boolean
+  openDetailTab?: 'basic' | 'media' | 'verification' | 'quality'
 }
 
 export type ArchiveTaskStatus = 'running' | 'success' | 'partial' | 'failed'

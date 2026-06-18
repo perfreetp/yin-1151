@@ -16,7 +16,9 @@ import {
   Tabs,
   Badge,
   Alert,
-  Modal
+  Modal,
+  Collapse,
+  Divider
 } from 'antd'
 import {
   HistoryOutlined,
@@ -27,11 +29,13 @@ import {
   ClockCircleOutlined,
   FileTextOutlined,
   UserOutlined,
-  SafetyOutlined
+  SafetyOutlined,
+  CaretRightOutlined,
+  EnvironmentOutlined
 } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import { useAppStore } from '../store'
-import type { ArchiveTask, ArchiveTaskCaseResult } from '../types'
+import type { ArchiveTask, ArchiveTaskCaseResult, QualityCheckItem } from '../types'
 import { ArchiveStatusLabels, VerifierRoleLabels, SurgicalStageLabels } from '../types'
 import { ArchiveHandoverModal } from './ArchiveHandoverModal'
 
@@ -178,7 +182,12 @@ export const ArchiveTaskCenter: React.FC = () => {
   }
 
   const handleJumpToCase = (caseId: string) => {
-    navigateTo('archive', { caseId, fromTab: 'archive_tasks' })
+    navigateTo('archive', {
+      caseId,
+      fromTab: 'archive_tasks',
+      openArchiveDetail: true,
+      openDetailTab: 'quality'
+    })
     setDetailVisible(false)
   }
 
@@ -297,93 +306,195 @@ export const ArchiveTaskCenter: React.FC = () => {
               </Descriptions>
             </Card>
 
-            <Card size="small" title="逐病例结果">
-              <List
-                dataSource={selectedTask.caseResults}
-                renderItem={(item) => (
-                  <List.Item
-                    actions={[
-                      item.status === 'success' ? (
-                        <Button
-                          key="handover"
-                          type="link"
-                          size="small"
-                          icon={<FileTextOutlined />}
-                          onClick={() => handleViewHandover(item.caseId)}
-                        >
-                          交接单
-                        </Button>
-                      ) : null,
-                      <Button
-                        key="view"
-                        type="link"
-                        size="small"
-                        icon={<EyeOutlined />}
-                        onClick={() => handleJumpToCase(item.caseId)}
-                      >
-                        查看病例
-                      </Button>
-                    ]}
-                  >
-                    <List.Item.Meta
-                      avatar={getCaseStatusIcon(item.status)}
-                      title={
-                        <Space>
-                          <Text strong>
-                            {item.patientName}（{item.hospitalNumber}）
-                          </Text>
-                          <Tag>{getCaseStatusText(item.status)}</Tag>
-                        </Space>
-                      }
-                      description={
-                        <Space direction="vertical" size={2} style={{ width: '100%' }}>
-                          <Text type="secondary">{item.surgeryName}</Text>
-                          {item.reason && (
-                            <Alert
-                              type={item.status === 'failed' ? 'error' : 'warning'}
-                              message={item.reason}
-                              showIcon
-                              style={{ padding: '4px 8px' }}
-                            />
-                          )}
-                          {item.warnings && item.warnings.length > 0 && (
-                            <Alert
-                              type="warning"
-                              message={`${item.warnings.length} 项提醒`}
-                              description={
-                                <ul style={{ margin: 0, paddingLeft: 18 }}>
-                                  {item.warnings.map((w, i) => (
-                                    <li key={i}>{w}</li>
-                                  ))}
-                                </ul>
-                              }
-                              showIcon
-                              style={{ padding: '4px 8px' }}
-                            />
-                          )}
-                          {item.status === 'success' && item.qualityCheckSnapshot && (
-                            <div style={{ marginTop: 4 }}>
-                              <Tag icon={<SafetyOutlined />} color="green">
-                                质控通过 {item.qualityCheckSnapshot.summary.passed}/
-                                {item.qualityCheckSnapshot.summary.total}
-                              </Tag>
-                              {item.qualityCheckSnapshot.summary.errorCount > 0 && (
-                                <Tag color="red">
-                                  错误 {item.qualityCheckSnapshot.summary.errorCount}
-                                </Tag>
-                              )}
-                              {item.qualityCheckSnapshot.summary.warningCount > 0 && (
-                                <Tag color="orange">
-                                  提醒 {item.qualityCheckSnapshot.summary.warningCount}
-                                </Tag>
-                              )}
-                            </div>
-                          )}
-                        </Space>
-                      }
-                    />
-                  </List.Item>
+            <Card size="small" title="逐病例结果（点击展开完整追溯）">
+              <Collapse
+                accordion
+                expandIcon={({ isActive }) => (
+                  <CaretRightOutlined rotate={isActive ? 90 : 0} />
                 )}
+                items={selectedTask.caseResults.map((item) => {
+                  const sn = item.qualityCheckSnapshot
+                  return {
+                    key: item.caseId,
+                    label: (
+                      <Space wrap style={{ width: '100%' }}>
+                        {getCaseStatusIcon(item.status)}
+                        <Text strong>
+                          {item.patientName}（{item.hospitalNumber}）
+                        </Text>
+                        <Tag
+                          color={
+                            item.status === 'success'
+                              ? 'green'
+                              : item.status === 'failed'
+                              ? 'red'
+                              : 'orange'
+                          }
+                        >
+                          {getCaseStatusText(item.status)}
+                        </Tag>
+                        <Tag color="blue">{item.surgeryName}</Tag>
+                        {sn && (
+                          <Tag icon={<SafetyOutlined />} color="geekblue">
+                            质控 {sn.summary.passed}/{sn.summary.total}（错{sn.summary.errorCount}·警
+                            {sn.summary.warningCount}）
+                          </Tag>
+                        )}
+                      </Space>
+                    ),
+                    children: (
+                      <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                        <Descriptions size="small" column={2} bordered>
+                          <Descriptions.Item label="归档操作者">
+                            <Space>
+                              <UserOutlined />
+                              {sn?.operator || selectedTask.operator}
+                            </Space>
+                          </Descriptions.Item>
+                          <Descriptions.Item label="归档时间">
+                            <Space>
+                              <ClockCircleOutlined />
+                              {sn?.createdAt || selectedTask.finishedAt || '未完成'}
+                            </Space>
+                          </Descriptions.Item>
+                        </Descriptions>
+
+                        {item.status === 'failed' && item.reason && (
+                          <Alert type="error" showIcon message={`归档失败：${item.reason}`} />
+                        )}
+                        {item.status === 'skipped' && item.reason && (
+                          <Alert type="warning" showIcon message={`已跳过：${item.reason}`} />
+                        )}
+
+                        {item.warnings && item.warnings.length > 0 && (
+                          <Alert
+                            type="warning"
+                            showIcon
+                            message={`${item.warnings.length} 项提醒`}
+                            description={
+                              <ul style={{ margin: 0, paddingLeft: 18 }}>
+                                {item.warnings.map((w, i) => (
+                                  <li key={i}>{w}</li>
+                                ))}
+                              </ul>
+                            }
+                          />
+                        )}
+
+                        <Divider orientation="left" style={{ margin: '4px 0' }}>
+                          <Text strong>
+                            <SafetyOutlined /> 质控清单逐项结果
+                            {sn
+                              ? `（快照时间：${sn.createdAt} · ${sn.operator}）`
+                              : '（失败/跳过病例已保留当时检查结果）'}
+                          </Text>
+                        </Divider>
+
+                        {sn ? (
+                          <List
+                            size="small"
+                            dataSource={sn.items}
+                            renderItem={(qi) => {
+                              const statusColor: Record<
+                                QualityCheckItem['category'],
+                                string
+                              > = {
+                                pass: 'green',
+                                error: 'red',
+                                warning: 'orange',
+                                info: 'blue'
+                              }
+                              return (
+                                <List.Item>
+                                  <List.Item.Meta
+                                    avatar={
+                                      <Tag color={statusColor[qi.category]}>
+                                        {qi.label}
+                                      </Tag>
+                                    }
+                                    title={
+                                      <Space>
+                                        {qi.passed ? (
+                                          <CheckCircleOutlined style={{ color: '#52c41a' }} />
+                                        ) : qi.category === 'error' ? (
+                                          <CloseCircleOutlined style={{ color: '#cf1322' }} />
+                                        ) : (
+                                          <ExclamationCircleOutlined
+                                            style={{ color: '#faad14' }}
+                                          />
+                                        )}
+                                        <Text strong>
+                                          {qi.passed
+                                            ? '通过'
+                                            : qi.category === 'error'
+                                            ? '错误'
+                                            : qi.category === 'warning'
+                                            ? '提醒'
+                                            : '提示'}
+                                        </Text>
+                                        {qi.targetWindow && (
+                                          <Tag color="geekblue">
+                                            <EnvironmentOutlined />{' '}
+                                            {qi.targetWindow === 'collection'
+                                              ? '术中采集'
+                                              : qi.targetWindow === 'verification'
+                                              ? '病例核对'
+                                              : '归档列表'}
+                                          </Tag>
+                                        )}
+                                      </Space>
+                                    }
+                                    description={
+                                      qi.messages.length > 0 ? (
+                                        <ul style={{ margin: 0, paddingLeft: 18 }}>
+                                          {qi.messages.map((m, mi) => (
+                                            <li key={mi} style={{ fontSize: 12 }}>
+                                              <Text type="secondary">{m}</Text>
+                                            </li>
+                                          ))}
+                                        </ul>
+                                      ) : (
+                                        <Text type="secondary" style={{ fontSize: 12 }}>
+                                          无问题
+                                        </Text>
+                                      )
+                                    }
+                                  />
+                                </List.Item>
+                              )
+                            }}
+                          />
+                        ) : (
+                          <Empty description="未记录质控快照" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+                        )}
+
+                        <Row justify="end" gutter={8}>
+                          {item.status === 'success' && (
+                            <Col>
+                              <Button
+                                size="small"
+                                icon={<FileTextOutlined />}
+                                onClick={() => handleViewHandover(item.caseId)}
+                              >
+                                归档交接单
+                              </Button>
+                            </Col>
+                          )}
+                          <Col>
+                            <Button
+                              size="small"
+                              type="primary"
+                              icon={<EyeOutlined />}
+                              onClick={() => handleJumpToCase(item.caseId)}
+                            >
+                              打开病例详情（质控页）
+                            </Button>
+                          </Col>
+                        </Row>
+                      </Space>
+                    )
+                  }
+                })}
               />
             </Card>
 

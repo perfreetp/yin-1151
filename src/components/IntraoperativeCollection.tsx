@@ -86,6 +86,7 @@ export const IntraoperativeCollection: React.FC = () => {
   const [moveTargetDevice, setMoveTargetDevice] = useState<ImagingDevice | null>(null)
   const [highlightCard, setHighlightCard] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const mediaCardRef = useRef<HTMLDivElement>(null)
 
   const {
     operatingRooms,
@@ -230,13 +231,23 @@ export const IntraoperativeCollection: React.FC = () => {
   useEffect(() => {
     if (navigationContext?.highlightCard) {
       setHighlightCard(navigationContext.highlightCard)
-      const timer = setTimeout(() => setHighlightCard(null), 3000)
+      // 滚动到对应卡片
+      if (navigationContext.highlightCard === 'imaging_stage' && mediaCardRef.current) {
+        setTimeout(() => {
+          mediaCardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+        }, 100)
+      }
+      const timer = setTimeout(() => {
+        setHighlightCard(null)
+        clearNavigationContext()
+      }, 3500)
       return () => clearTimeout(timer)
     }
   }, [navigationContext])
 
   useEffect(() => {
-    if (navigationContext?.caseId && navigationContext.fromTab) {
+    if (navigationContext?.caseId && navigationContext.fromTab && !navigationContext.highlightCard) {
+      // 只有纯 caseId 带过来没有高亮要求时才立即清除
       clearNavigationContext()
     }
   }, [navigationContext, clearNavigationContext])
@@ -785,11 +796,17 @@ export const IntraoperativeCollection: React.FC = () => {
           </Card>
 
           <Card
+            ref={mediaCardRef}
             size="small"
             title={
               <Space wrap>
                 <Text>影像资料</Text>
                 <Tag color="blue">{currentCase.mediaItems.length} 个文件</Tag>
+                {highlightCard === 'imaging_stage' && (
+                  <Tag color="geekblue" icon={<EnvironmentOutlined />}>
+                    📍 定位：请标记手术阶段
+                  </Tag>
+                )}
                 <Segmented
                   size="small"
                   value={viewMode}
@@ -877,7 +894,17 @@ export const IntraoperativeCollection: React.FC = () => {
                 </Button>
               ) : null
             }
-            style={{ flex: 1, overflow: 'auto' }}
+            style={{
+              flex: 1,
+              overflow: 'auto',
+              boxShadow:
+                highlightCard === 'imaging_stage'
+                  ? '0 0 0 3px #1677ff, 0 0 24px rgba(22, 119, 255, 0.35)'
+                  : undefined,
+              borderColor: highlightCard === 'imaging_stage' ? '#1677ff' : undefined,
+              transition: 'box-shadow 0.3s, border-color 0.3s',
+              marginBottom: 12
+            }}
             bodyStyle={{ padding: viewMode === 'list' ? 0 : 12 }}
           >
             {viewMode === 'list' ? (
